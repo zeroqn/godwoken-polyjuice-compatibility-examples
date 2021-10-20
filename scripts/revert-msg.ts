@@ -1,20 +1,51 @@
-import { ContractFactory, Contract, providers } from "ethers";
+import { ContractFactory, Contract, providers, BigNumberish } from "ethers";
+import { PolyjuiceJsonRpcProvider } from "@polyjuice-provider/ethers";
 
-import { deployer, initGWKAccountIfNeeded, networkSuffix } from "../common";
+import { rpc, deployer, isGodwoken, initGWKAccountIfNeeded, networkSuffix } from "../common";
 
 import { TransactionSubmitter } from "../TransactionSubmitter";
 
 import RevertMsg from "../artifacts/contracts/RevertMsg.sol/RevertMsg.json";
 
+import { RequestManager, HTTPTransport, Client } from "@open-rpc/client-js";
+const transport = new HTTPTransport("http://localhost:8024");
+const client = new Client(new RequestManager([transport]));
+
 interface IRevertMsg extends Contract {
     test_revert(msg: string): Promise<providers.TransactionResponse>;
+    store(newValue: BigNumberish): Promise<providers.TransactionResponse>;
 }
 
 const deployerAddress = deployer.address;
+const waitFor = (delay: number) => new Promise(resolve => setTimeout(resolve, delay));
+
+async function waitForErrReceipt(txHash: string): Promise<any> {
+    let count_down = 10;
+    while (count_down > 0) {
+        await waitFor(2000);
+        const receipt = await client.request({ method: "eth_getTransactionReceipt", params: [txHash] });
+        if (receipt != null) {
+            return receipt;
+        }
+
+        count_down = count_down - 1;
+        if (count_down === 0) {
+            throw new Error('unable to fetch error transaction receipt');
+        }
+    }
+}
 
 async function main() {
     console.log("Deployer address:", deployerAddress);
     await initGWKAccountIfNeeded(deployerAddress);
+
+    let deployerRecipientAddress = deployerAddress;
+    if (isGodwoken) {
+        const { godwoker } = rpc as PolyjuiceJsonRpcProvider;
+        deployerRecipientAddress =
+            await godwoker.getShortAddressByAllTypeEthAddress(deployerAddress);
+        console.log("Deployer godwoken address:", deployerRecipientAddress);
+    }
 
     const transactionSubmitter = await TransactionSubmitter.newWithHistory(
         `create2${networkSuffix ? `-${networkSuffix}` : ""}.json`,
@@ -22,7 +53,7 @@ async function main() {
     );
 
     let receipt = await transactionSubmitter.submitAndWait(
-        `Deploy Create2`,
+        `Deploy RevertMsg`,
         () => {
             const implementationFactory = new ContractFactory(
                 RevertMsg.abi,
@@ -35,7 +66,7 @@ async function main() {
     );
 
     const revertMsgAddress = receipt.contractAddress;
-    console.log(`    revert msg address:`, revertMsgAddress);
+    console.log(`revert msg address:`, revertMsgAddress);
 
     const revertMsg = new Contract(
         revertMsgAddress,
@@ -43,10 +74,47 @@ async function main() {
         deployer,
     ) as IRevertMsg;
 
-    receipt = await transactionSubmitter.submitAndWait(
-        'test revert message',
-        () => revertMsg.test_revert("hello world")
-    );
+    try {
+        await transactionSubmitter.submitAndWait(
+            'test execute',
+            () => revertMsg.test_revert('test message')
+        );
+    } catch (error) {
+        if (error.message.indexOf('test message') == -1) {
+            throw new Error('unable to get revert message');
+        }
+    }
+
+    console.log('Running transaction: test submit');
+    let tipBlockNumber = await rpc.getBlockNumber();
+    let res = await revertMsg.store(tipBlockNumber);
+    let errReceipt = await waitForErrReceipt(res.hash);
+    const statusReason = Buffer.from(errReceipt.status_reason);
+    if (statusReason.toString('utf8').indexOf('no no no no') == -1) {
+        throw new Error('unexpected store revert message');
+    }
+
+    console.log('test clear expired block error tx receipt');
+    tipBlockNumber = await rpc.getBlockNumber();
+    let expiredAfterMemBlockNumber = BigInt(errReceipt.block_number) + BigInt(4);
+    console.log(`current tip block ${tipBlockNumber}, wait until mem block ${expiredAfterMemBlockNumber}`);
+    while (tipBlockNumber + 1 <= expiredAfterMemBlockNumber) {
+        await waitFor(7000);
+        tipBlockNumber = await rpc.getBlockNumber();
+        console.log(`tip block number ${tipBlockNumber}`);
+    }
+
+    // Make another error receipt to trigger expired block clearing
+    res = await revertMsg.store(tipBlockNumber);
+    await waitForErrReceipt(res.hash)
+    console.log(`try fetch error receipt for ${errReceipt.hash}`);
+    let tryReceipt = await client.request({ method: "eth_getTransactionReceipt", params: [errReceipt.hash] });
+    if (tryReceipt != null) {
+        if (tryReceipt.block_number != errReceipt.block_number) {
+            throw new Error(`error receipt saved in db changed, from block ${errReceipt.block_number} to block ${tryReceipt.block_number}`);
+        }
+        throw new Error("expired error receipt isn't cleared");
+    }
 }
 
 main()
