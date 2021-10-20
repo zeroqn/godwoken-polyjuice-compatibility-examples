@@ -20,9 +20,9 @@ const deployerAddress = deployer.address;
 const waitFor = (delay: number) => new Promise(resolve => setTimeout(resolve, delay));
 
 async function waitForErrReceipt(txHash: string): Promise<any> {
-    let count_down = 10;
+    let count_down = 20;
     while (count_down > 0) {
-        await waitFor(2000);
+        await waitFor(5000);
         const receipt = await client.request({ method: "eth_getTransactionReceipt", params: [txHash] });
         if (receipt != null) {
             return receipt;
