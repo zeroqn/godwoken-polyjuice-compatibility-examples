@@ -80,6 +80,7 @@ async function main() {
             () => revertMsg.test_revert('test message')
         );
     } catch (error) {
+        console.log(error);
         if (error.message.indexOf('test message') == -1) {
             throw new Error('unable to get revert message');
         }
@@ -89,14 +90,14 @@ async function main() {
     let tipBlockNumber = await rpc.getBlockNumber();
     let res = await revertMsg.store(tipBlockNumber);
     let errReceipt = await waitForErrReceipt(res.hash);
-    const statusReason = Buffer.from(errReceipt.status_reason);
-    if (statusReason.toString('utf8').indexOf('no no no no') == -1) {
+    const failedReason = errReceipt.failed_reason.message;
+    if (failedReason.toString('utf8').indexOf('no no no no') == -1) {
         throw new Error('unexpected store revert message');
     }
 
     console.log('test clear expired block error tx receipt');
     tipBlockNumber = await rpc.getBlockNumber();
-    let expiredAfterMemBlockNumber = BigInt(errReceipt.block_number) + BigInt(4);
+    let expiredAfterMemBlockNumber = BigInt(errReceipt.blockNumber) + BigInt(4);
     console.log(`current tip block ${tipBlockNumber}, wait until mem block ${expiredAfterMemBlockNumber}`);
     while (tipBlockNumber + 1 <= expiredAfterMemBlockNumber) {
         await waitFor(7000);
@@ -107,11 +108,11 @@ async function main() {
     // Make another error receipt to trigger expired block clearing
     res = await revertMsg.store(tipBlockNumber);
     await waitForErrReceipt(res.hash)
-    console.log(`try fetch error receipt for ${errReceipt.hash}`);
-    let tryReceipt = await client.request({ method: "eth_getTransactionReceipt", params: [errReceipt.hash] });
+    console.log(`try fetch error receipt for ${errReceipt.transactionHash}`);
+    let tryReceipt = await client.request({ method: "eth_getTransactionReceipt", params: [errReceipt.transactionHash] });
     if (tryReceipt != null) {
-        if (tryReceipt.block_number != errReceipt.block_number) {
-            throw new Error(`error receipt saved in db changed, from block ${errReceipt.block_number} to block ${tryReceipt.block_number}`);
+        if (tryReceipt.blockNumber != errReceipt.blockNumber) {
+            throw new Error(`error receipt saved in db changed, from block ${errReceipt.blockNumber} to block ${tryReceipt.blockNumber}`);
         }
         throw new Error("expired error receipt isn't cleared");
     }
