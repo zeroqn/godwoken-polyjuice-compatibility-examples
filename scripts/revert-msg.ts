@@ -1,5 +1,6 @@
 import { ContractFactory, Contract, providers, BigNumberish } from "ethers";
 import { PolyjuiceJsonRpcProvider } from "@polyjuice-provider/ethers";
+import { ShortAddress } from "@polyjuice-provider/base";
 
 import { rpc, deployer, isGodwoken, initGWKAccountIfNeeded, networkSuffix } from "../common";
 
@@ -42,8 +43,9 @@ async function main() {
     let deployerRecipientAddress = deployerAddress;
     if (isGodwoken) {
         const { godwoker } = rpc as PolyjuiceJsonRpcProvider;
-        deployerRecipientAddress =
+        const shortAddr: ShortAddress =
             await godwoker.getShortAddressByAllTypeEthAddress(deployerAddress);
+        deployerRecipientAddress = shortAddr.value;
         console.log("Deployer godwoken address:", deployerRecipientAddress);
     }
 
